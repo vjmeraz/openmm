@@ -379,6 +379,156 @@ class TestForceField(unittest.TestCase):
             self.assertEqual(vectors[i], self.pdb1.topology.getPeriodicBoxVectors()[i])
             self.assertEqual(vectors[i], system.getDefaultPeriodicBoxVectors()[i])
 
+    def test_duplicateAtomTypeAllowed(self):
+        """Test that multiple registrations of the same atom type with identical definitions are allowed."""
+
+        xml1 = """
+<ForceField>
+ <AtomTypes>
+  <Type name="test-name" class="test" element="H" mass="1.007947"/>
+ </AtomTypes>
+</ForceField>"""
+
+        xml2 = """
+<ForceField>
+ <AtomTypes>
+  <Type name="test-name" class="test" element="H" mass="1.007947"/>
+ </AtomTypes>
+</ForceField>"""
+
+        ff = ForceField(StringIO(xml1), StringIO(xml2))
+
+        self.assertTrue("test-name" in ff._atomTypes)
+        at = ff._atomTypes["test-name"]
+        self.assertEqual(at.atomClass, "test")
+        self.assertEqual(at.element, elem.hydrogen)
+        self.assertEqual(at.mass, 1.007947)
+
+    def test_duplicateAtomTypeAllowedNoElement(self):
+        """Test that multiple registrations of the same atom type with identical definitions and without elements are allowed."""
+
+        xml1 = """
+<ForceField>
+ <AtomTypes>
+  <Type name="test-name" class="test" mass="0.0"/>
+ </AtomTypes>
+</ForceField>"""
+
+        xml2 = """
+<ForceField>
+ <AtomTypes>
+  <Type name="test-name" class="test" mass="0.0"/>
+ </AtomTypes>
+</ForceField>"""
+
+        ff = ForceField(StringIO(xml1), StringIO(xml2))
+
+        self.assertTrue("test-name" in ff._atomTypes)
+        at = ff._atomTypes["test-name"]
+        self.assertEqual(at.atomClass, "test")
+        self.assertEqual(at.element, None)
+        self.assertEqual(at.mass, 0.0)
+
+    def test_duplicateAtomTypeForbiddenClass(self):
+        """Test that multiple registrations of the same atom type with different classes are forbidden."""
+
+        xml1 = """
+<ForceField>
+ <AtomTypes>
+  <Type name="test-name" class="test-1" element="H" mass="1.007947"/>
+ </AtomTypes>
+</ForceField>"""
+
+        xml2 = """
+<ForceField>
+ <AtomTypes>
+  <Type name="test-name" class="test-2" element="H" mass="1.007947"/>
+ </AtomTypes>
+</ForceField>"""
+
+        with self.assertRaises(ValueError):
+            ff = ForceField(StringIO(xml1), StringIO(xml2))
+
+    def test_duplicateAtomTypeForbiddenElement(self):
+        """Test that multiple registrations of the same atom type with different elements are forbidden."""
+
+        xml1 = """
+<ForceField>
+ <AtomTypes>
+  <Type name="test-name" class="test" element="H" mass="1.007947"/>
+ </AtomTypes>
+</ForceField>"""
+
+        xml2 = """
+<ForceField>
+ <AtomTypes>
+  <Type name="test-name" class="test" element="C" mass="1.007947"/>
+ </AtomTypes>
+</ForceField>"""
+
+        with self.assertRaises(ValueError):
+            ff = ForceField(StringIO(xml1), StringIO(xml2))
+
+    def test_duplicateAtomTypeForbiddenElementAdded(self):
+        """Test that multiple registrations of the same atom type, the first without and the second with an element, are forbidden."""
+
+        xml1 = """
+<ForceField>
+ <AtomTypes>
+  <Type name="test-name" class="test" mass="1.007947"/>
+ </AtomTypes>
+</ForceField>"""
+
+        xml2 = """
+<ForceField>
+ <AtomTypes>
+  <Type name="test-name" class="test" element="H" mass="1.007947"/>
+ </AtomTypes>
+</ForceField>"""
+
+        with self.assertRaises(ValueError):
+            ff = ForceField(StringIO(xml1), StringIO(xml2))
+
+    def test_duplicateAtomTypeForbiddenElementRemoved(self):
+        """Test that multiple registrations of the same atom type, the first with and the second without an element, are forbidden."""
+
+        xml1 = """
+<ForceField>
+ <AtomTypes>
+  <Type name="test-name" class="test" element="H" mass="1.007947"/>
+ </AtomTypes>
+</ForceField>"""
+
+        xml2 = """
+<ForceField>
+ <AtomTypes>
+  <Type name="test-name" class="test" mass="1.007947"/>
+ </AtomTypes>
+</ForceField>"""
+
+        with self.assertRaises(ValueError):
+            ff = ForceField(StringIO(xml1), StringIO(xml2))
+
+    def test_duplicateAtomTypeForbiddenMass(self):
+        """Test that multiple registrations of the same atom type with different masses are forbidden."""
+
+        xml1 = """
+<ForceField>
+ <AtomTypes>
+  <Type name="test-name" class="test" element="H" mass="1.007947"/>
+ </AtomTypes>
+</ForceField>"""
+
+        xml2 = """
+<ForceField>
+ <AtomTypes>
+  <Type name="test-name" class="test" element="H" mass="12.01078"/>
+ </AtomTypes>
+</ForceField>"""
+
+        with self.assertRaises(ValueError):
+            ff = ForceField(StringIO(xml1), StringIO(xml2))
+
     def test_ResidueAttributes(self):
         """Test a ForceField that gets per-particle parameters from residue attributes."""
 
@@ -914,68 +1064,81 @@ class TestForceField(unittest.TestCase):
 
     def test_NBFix(self):
         """Test using LennardJonesGenerator to implement NBFix terms."""
-        # Create a chain of five atoms.
+        # Create a chain of seven atoms.
 
         top = Topology()
         chain = top.addChain()
         res = top.addResidue('RES', chain)
-        top.addAtom('A', elem.oxygen, res)
-        top.addAtom('B', elem.carbon, res)
-        top.addAtom('C', elem.carbon, res)
-        top.addAtom('D', elem.carbon, res)
-        top.addAtom('E', elem.nitrogen, res)
+        top.addAtom('A', elem.carbon, res)
+        top.addAtom('B', elem.nitrogen, res)
+        top.addAtom('C', elem.nitrogen, res)
+        top.addAtom('D', elem.oxygen, res)
+        top.addAtom('E', elem.carbon, res)
+        top.addAtom('F', elem.nitrogen, res)
+        top.addAtom('G', elem.oxygen, res)
         atoms = list(top.atoms())
         top.addBond(atoms[0], atoms[1])
         top.addBond(atoms[1], atoms[2])
         top.addBond(atoms[2], atoms[3])
         top.addBond(atoms[3], atoms[4])
+        top.addBond(atoms[4], atoms[5])
+        top.addBond(atoms[5], atoms[6])
 
         # Create the force field and system.
 
         xml = """
 <ForceField>
  <AtomTypes>
-  <Type name="A" class="A" element="O" mass="1"/>
-  <Type name="B" class="B" element="C" mass="1"/>
-  <Type name="C" class="C" element="C" mass="1"/>
-  <Type name="D" class="D" element="C" mass="1"/>
-  <Type name="E" class="E" element="N" mass="1"/>
+  <Type name="A" class="A" element="C" mass="1"/>
+  <Type name="B" class="B" element="N" mass="1"/>
+  <Type name="C" class="C" element="O" mass="1"/>
  </AtomTypes>
  <Residues>
   <Residue name="RES">
    <Atom name="A" type="A"/>
    <Atom name="B" type="B"/>
-   <Atom name="C" type="C"/>
-   <Atom name="D" type="D"/>
-   <Atom name="E" type="E"/>
+   <Atom name="C" type="B"/>
+   <Atom name="D" type="C"/>
+   <Atom name="E" type="A"/>
+   <Atom name="F" type="B"/>
+   <Atom name="G" type="C"/>
    <Bond atomName1="A" atomName2="B"/>
    <Bond atomName1="B" atomName2="C"/>
    <Bond atomName1="C" atomName2="D"/>
    <Bond atomName1="D" atomName2="E"/>
+   <Bond atomName1="E" atomName2="F"/>
+   <Bond atomName1="F" atomName2="G"/>
   </Residue>
  </Residues>
  <LennardJonesForce lj14scale="0.3">
-  <Atom type="A" sigma="1" epsilon="0.1"/>
-  <Atom type="B" sigma="2" epsilon="0.2"/>
-  <Atom type="C" sigma="3" epsilon="0.3"/>
-  <Atom type="D" sigma="4" epsilon="0.4"/>
-  <Atom type="E" sigma="4" epsilon="0.4"/>
-  <NBFixPair type1="A" type2="D" sigma="2.5" epsilon="1.1"/>
-  <NBFixPair type1="A" type2="E" sigma="3.5" epsilon="1.5"/>
+  <Atom type="A" sigma="2.1" epsilon="1.1"/>
+  <Atom type="B" sigma="2.2" epsilon="1.2"/>
+  <Atom type="C" sigma="2.4" epsilon="1.4"/>
+  <NBFixPair type1="C" type2="C" sigma="3.1" epsilon="4.1"/>
+  <NBFixPair type1="A" type2="A" sigma="3.2" epsilon="4.2"/>
+  <NBFixPair type1="B" type2="A" sigma="3.4" epsilon="4.4"/>
  </LennardJonesForce>
 </ForceField> """
         ff = ForceField(StringIO(xml))
         system = ff.createSystem(top)
 
         # Check that it produces the correct energy.
+        # The chain is A-B-B-C-A-B-C, and the pairs that are evaluated are:
+        # A0-C3, A0-A4, A0-B5, A0-C6,
+        # B1-A4, B1-B5, B1-C6,
+        # B2-B5, B2-C6,
+        # C3-C6.
 
         integrator = VerletIntegrator(0.001)
         context = Context(system, integrator, Platform.getPlatform(0))
-        positions = [Vec3(i, 0, 0) for i in range(5)]*nanometers
+        positions = [Vec3(i, 0, 0) for i in range(7)]*nanometers
         context.setPositions(positions)
         def ljEnergy(sigma, epsilon, r):
             return 4*epsilon*((sigma/r)**12-(sigma/r)**6)
-        expected = 0.3*ljEnergy(2.5, 1.1, 3) + 0.3*ljEnergy(3.0, sqrt(0.08), 3) + ljEnergy(3.5, 1.5, 4)
+        expected = 0.3*ljEnergy(2.25, math.sqrt(1.54), 3) + ljEnergy(3.2, 4.2, 4) + ljEnergy(3.4, 4.4, 5) + ljEnergy(2.25, math.sqrt(1.54), 6) \
+                 + 0.3*ljEnergy(3.4, 4.4, 3) + ljEnergy(2.2, 1.2, 4) + ljEnergy(2.3, math.sqrt(1.68), 5) \
+                 + 0.3*ljEnergy(2.2, 1.2, 3) + ljEnergy(2.3, math.sqrt(1.68), 4) \
+                 + 0.3*ljEnergy(3.1, 4.1, 3)
         self.assertAlmostEqual(expected, context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(kilojoules_per_mole))
 
     def test_IgnoreExternalBonds(self):
