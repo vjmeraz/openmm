@@ -74,7 +74,7 @@ class Metadynamics(object):
     directory, and also load in and apply the biases added by other processes.
     """
 
-    def __init__(self, system, variables, temperature, biasFactor, height, frequency, saveFrequency=None, biasDir=None, rbiasDir=None, append=False):
+    def __init__(self, system, variables, temperature, biasFactor, height, frequency, saveFrequency=None, biasDir=None, rbias=False, append=False):
         """Create a Metadynamics object.
 
         Parameters
@@ -119,7 +119,7 @@ class Metadynamics(object):
         self.height = height
         self.frequency = frequency
         self.biasDir = biasDir
-        self.rbiasDir = rbiasDir
+        self.rbias = rbias
         self.saveFrequency = saveFrequency
         
         self._biasFile = glob.glob(f"{self.biasDir}/bias_*_*.npy")
@@ -137,7 +137,7 @@ class Metadynamics(object):
             
         self._loadedBiases = {}
         self._syncWithDisk()
-        self.rbias()
+        self._rbias()
         self._deltaT = temperature*(biasFactor-1)
         varNames = ['cv%d' % i for i in range(len(variables))]
         self._force = mm.CustomCVForce('table(%s)' % ', '.join(varNames))
@@ -186,12 +186,12 @@ class Metadynamics(object):
             simulation.step(nextSteps)
             if simulation.currentStep % self.frequency == 0:
                 position = self._force.getCollectiveVariableValues(simulation.context)
-                energy = simulation.context.getState(getEnergy=True, groups={forceGroup}).getPotentialEnergy()
+                energy = simulation.context.getState(energy=True, groups={forceGroup}).getPotentialEnergy()
                 height = self.height*np.exp(-energy/(unit.MOLAR_GAS_CONSTANT_R*self._deltaT))
                 self._addGaussian(position, height, simulation.context)
             if self.saveFrequency is not None and simulation.currentStep % self.saveFrequency == 0:
                 self._syncWithDisk()
-                self.rbias()
+                self._rbias()
             stepsToGo -= nextSteps
 
     def getFreeEnergy(self):
@@ -207,7 +207,6 @@ class Metadynamics(object):
         """Get the current values of all collective variables in a Simulation."""
         return self._force.getCollectiveVariableValues(simulation.context)
 
-    
     def _addGaussian(self, position, height, context):
         """Add a Gaussian to the bias function."""
         # Compute a Gaussian along each axis.
@@ -245,7 +244,7 @@ class Metadynamics(object):
         """Save biases to disk, and check for updated files created by other processes."""
         if self.biasDir is None:
             return
-        
+
         # Use a safe save to write out the biases to disk, then delete the older file.
 
         oldName = os.path.join(self.biasDir, 'bias_%d_%d.npy' % (self._id, self._saveIndex))
@@ -255,8 +254,8 @@ class Metadynamics(object):
         np.save(tempName, self._selfBias)
         os.rename(tempName, fileName)
         
-        # currently saves bias at each outfreq
-        shutil.copyfile(fileName, f"{self.biasDir}/bias_{self._saveIndex}.npy")
+        if self.rbias is True:
+            shutil.copyfile(fileName, f"{self.biasDir}/bias_{self._saveIndex}.npy")
         
         if os.path.exists(oldName):
             os.remove(oldName)
@@ -287,52 +286,79 @@ class Metadynamics(object):
             self._totalBias = np.copy(self._selfBias)
             for bias in self._loadedBiases.values():
                 self._totalBias += bias.bias
-                
+
     def ct(self, bias):
         """
         Calculates correction term c(t) for given bias.
-        From Valsson, O., Tiwary, P., Parrinello, M., Enhancing Important Fluctuations: Rare Events and Metadynamics from a Conceptual Viewpoint, (2016)
+        From Valsson, O., Tiwary, P., Parrinello, M., 
+        Enhancing Important Fluctuations: Rare Events and Metadynamics from a Conceptual Viewpoint, (2016)
         """
         gamma = self.biasFactor
         beta = 1/self.temperature
-        s1 = np.sum(np.exp((gamma/(gamma-1)) * bias), axis=(0,1))
-        s2 = np.sum(np.exp((1/(gamma-1)) * bias), axis=(0,1))
+
+        if len(self.variables) == 1:
+            s1 = np.sum(np.exp((gamma/(gamma-1)) * bias), axis=(0))
+            s2 = np.sum(np.exp((1/(gamma-1)) * bias), axis=(0))
+        if len(self.variables) == 2:
+            s1 = np.sum(np.exp((gamma/(gamma-1)) * bias), axis=(0,1))
+            s2 = np.sum(np.exp((1/(gamma-1)) * bias), axis=(0,1))
         
         return np.log(s1/s2) / beta * 8.314*10**(-3)
-        
-    def rbias(self):
+            
+    def _rbias(self):
         """
         Calculates reweighted bias
         """
-        if self.rbiasDir is None:
+        if self.rbias is False:
             return
-            
+        
         if self._saveIndex >= 2:
             oldBiasDir = os.path.join(f"{self.biasDir}/bias_{self._saveIndex-1}.npy")
             newBiasDir = os.path.join(f"{self.biasDir}/bias_{self._saveIndex}.npy")
             
             newBias, oldBias = np.load(newBiasDir), np.load(oldBiasDir)
             diff_bias = newBias - oldBias
-            # bins where new bias values have been deposited
-            y_bins, x_bins = np.where(diff_bias==diff_bias.max())
-            bias_weight = newBias[x_bins, y_bins][0]
-            c_t = self.ct(newBias)._value
-            # reweighted bias value
-            reweight = bias_weight - c_t
+
+            if len(self.variables) == 1:
+                # bins where new bias values have been deposited
+                bins = np.where(diff_bias==diff_bias.max())
+                bias_weight = newBias[bins][0]
+                c_t = self.ct(newBias)._value
+                # reweighted bias value
+                reweight = bias_weight - c_t
                 
-            file = f"{self.rbiasDir}/rbias.dat"
-            header='reweight, c_t, bias_weight, x_bins, y_bins'
-            fileExists = os.path.exists(file)
-            
-            if np.sum(diff_bias) != 0:
-                with open(file, 'a' if fileExists else 'w') as f:
-                    np.savetxt(f, np.c_[reweight, c_t, bias_weight, x_bins[0], y_bins[0]],
-                               header = header if not fileExists else '',
-                               delimiter='\t')
+                file = f"{self.biasDir}/rbias.dat"
+                header='reweight, c_t, bias_weight, bins'
+                fileExists = os.path.exists(file)
+                
+                if np.sum(diff_bias) != 0:
+                    with open(file, 'a' if fileExists else 'w') as f:
+                        np.savetxt(f, np.c_[reweight, c_t, bias_weight, bins[0]],
+                                   header = header if not fileExists else '',
+                                   delimiter='\t')
 
-            if os.path.exists(oldBiasDir):
-                os.remove(oldBiasDir)
+                if os.path.exists(oldBiasDir):
+                    os.remove(oldBiasDir)
 
+            if len(self.variables) == 2:
+                y_bins, x_bins = np.where(diff_bias==diff_bias.max())
+                bias_weight = newBias[x_bins, y_bins][0]
+                c_t = self.ct(newBias)._value
+                reweight = bias_weight - c_t
+                
+                file = f"{self.biasDir}/rbias.dat"
+                header='reweight, c_t, bias_weight, x_bins, y_bins'
+                fileExists = os.path.exists(file)
+                
+                if np.sum(diff_bias) != 0:
+                    with open(file, 'a' if fileExists else 'w') as f:
+                        np.savetxt(f, np.c_[reweight, c_t, bias_weight, x_bins[0], y_bins[0]],
+                                   header = header if not fileExists else '',
+                                   delimiter='\t')
+
+                if os.path.exists(oldBiasDir):
+                    os.remove(oldBiasDir)
+    
 class BiasVariable(object):
     """A collective variable that can be used to bias a simulation with metadynamics."""
 
@@ -377,3 +403,4 @@ class BiasVariable(object):
             return quantity
 
 _LoadedBias = namedtuple('LoadedBias', ['id', 'index', 'bias'])
+
